@@ -30,7 +30,7 @@ fn test_initialize_verifier_stores_vk() {
     let client = ProofVerifierClient::new(&env, &contract_id);
 
     let vk = mock_verification_key(&env);
-    
+
     // Initialize
     client.initialize_verifier(&vk);
 
@@ -52,7 +52,7 @@ fn test_initialize_verifier_twice_panics() {
 
     let vk = mock_verification_key(&env);
     client.initialize_verifier(&vk);
-    
+
     // Attempting to initialize again should panic
     client.initialize_verifier(&vk);
 }
@@ -78,8 +78,8 @@ fn test_verify_payment_proof_interface() {
     client.initialize_verifier(&vk);
 
     let proof = mock_snarkjs_proof(&env);
-    
-    // Create matching length of public inputs. Our mock VK has 3 `ic` points. 
+
+    // Create matching length of public inputs. Our mock VK has 3 `ic` points.
     // The number of public inputs must be exactly `ic.len() - 1` = 2.
     let public_inputs = Vec::from_array(
         &env,
@@ -104,14 +104,9 @@ fn test_verify_payment_proof_rejects_wrong_input_length() {
     client.initialize_verifier(&vk);
 
     let proof = mock_snarkjs_proof(&env);
-    
+
     // Provide 1 input instead of the expected 2
-    let short_inputs = Vec::from_array(
-        &env,
-        [
-            BytesN::from_array(&env, &[11u8; 32]),
-        ],
-    );
+    let short_inputs = Vec::from_array(&env, [BytesN::from_array(&env, &[11u8; 32])]);
 
     // The interface must reject it
     let is_valid = client.verify_payment_proof(&proof, &short_inputs);

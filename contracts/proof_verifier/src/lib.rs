@@ -3,7 +3,7 @@
 use soroban_sdk::{contract, contractimpl, contracttype, BytesN, Env, Vec};
 
 /// A generic Verification Key for a Groth16 circuit on BN254.
-/// 
+///
 /// Maps natively to SnarkJS `vkey.json` components.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,13 +33,15 @@ pub struct ProofVerifier;
 #[contractimpl]
 impl ProofVerifier {
     /// Initialize the verifier contract with a verification key.
-    /// 
+    ///
     /// This should be called exactly once during deployment/setup.
     pub fn initialize_verifier(env: Env, vk: VerificationKey) {
         if env.storage().persistent().has(&DataKey::VerificationKey) {
             panic!("Verifier already initialized");
         }
-        env.storage().persistent().set(&DataKey::VerificationKey, &vk);
+        env.storage()
+            .persistent()
+            .set(&DataKey::VerificationKey, &vk);
     }
 
     /// Read the currently stored verification key.
@@ -74,7 +76,7 @@ impl ProofVerifier {
             .get(&DataKey::VerificationKey)
             .expect("Verifier not initialized");
 
-        // The number of provided public inputs must match the expected number of 
+        // The number of provided public inputs must match the expected number of
         // VerificationKey `ic` points minus 1 (because ic[0] is the constant term).
         if public_inputs.len() != vk.ic.len() - 1 {
             return false;
@@ -82,7 +84,7 @@ impl ProofVerifier {
 
         // Ideally, this will map perfectly to the upcoming Soroban host function:
         // `env.crypto().verify_groth16(Curve::BN254, &vk_bytes, &proof, &public_inputs)`
-        // 
+        //
         // As of SDK 21.x, this method is simulated.
         Self::simulated_verify_groth16(&env, &vk, proof, public_inputs)
     }
