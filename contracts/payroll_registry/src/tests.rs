@@ -191,4 +191,32 @@ fn test_authorization_add_employee_fails_for_non_admin() {
     // The attacker's signature is in the auth list, but it does not match `info.admin` (which is `correct_admin`).
     // Expected: Panic from the Soroban host terminating the execution for a missing correct signature.
     registry.add_employee(&company_id, &mock_employee, &fake_commitment);
+#[test]
+fn test_get_company_returns_company_info() {
+    let (env, contract_id) = setup();
+    let client = PayrollRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let company_id = client.register_company(&admin, &treasury);
+    let company = client.get_company(&company_id);
+
+    assert_eq!(company.admin, admin);
+    assert_eq!(company.treasury, treasury);
+}
+
+#[test]
+fn test_get_commitment_returns_employee_commitment() {
+    let (env, contract_id) = setup();
+    let client = PayrollRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let employee = Address::generate(&env);
+    let commitment = BytesN::from_array(&env, &[7u8; 32]);
+
+    let company_id = client.register_company(&admin, &treasury);
+    client.add_employee(&company_id, &employee, &commitment);
+
+    let got = client.get_commitment(&company_id, &employee);
+    assert_eq!(got, commitment);
 }

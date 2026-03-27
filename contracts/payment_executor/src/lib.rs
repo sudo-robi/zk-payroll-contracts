@@ -3,12 +3,15 @@
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Symbol,
 };
+use payroll_registry::{CompanyInfo, PayrollRegistryClient};
+use proof_verifier::{Groth16Proof, ProofVerifierClient};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, BytesN, Env};
 
 /// Payment record
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct PaymentRecord {
-    pub company_id: Symbol,
+    pub company_id: u64,
     pub employee: Address,
     pub proof_hash: BytesN<32>,
     pub timestamp: u64,
@@ -41,6 +44,7 @@ pub enum DataKey {
     Payment(Address, u32), // (employee, period)
     TotalPaid(Symbol),     // Total paid by company
     Nullifier(BytesN<32>), // Cryptographic nullifier tracking
+    TotalPaid(u64),        // Total paid by company
 }
 
 #[contract]
@@ -48,6 +52,17 @@ pub struct PaymentExecutor;
 
 #[contractimpl]
 impl PaymentExecutor {
+    fn amount_to_public_input(env: &Env, amount: i128) -> BytesN<32> {
+        if amount < 0 {
+            panic!("Amount must be non-negative");
+        }
+
+        let mut bytes = [0u8; 32];
+        let amount_u128 = amount as u128;
+        bytes[16..].copy_from_slice(&amount_u128.to_be_bytes());
+        BytesN::from_array(env, &bytes)
+    }
+
     /// Initialize with contract addresses
     pub fn initialize(env: Env, addresses: ContractAddresses) {
         let key = DataKey::Addresses;
@@ -66,7 +81,7 @@ impl PaymentExecutor {
     #[allow(clippy::too_many_arguments)]
     pub fn execute_payment(
         env: Env,
-        company_id: Symbol,
+        company_id: u64,
         employee: Address,
         amount: i128, // Payment amount (verified by ZK proof)
         proof_a: BytesN<64>,
@@ -93,37 +108,38 @@ impl PaymentExecutor {
             return Err(PaymentError::AlreadyPaid);
         }
 
-        // TODO: Call proof verifier contract
-        // let verifier = ProofVerifierClient::new(&env, &addresses.verifier);
-        // let proof = Groth16Proof { a: proof_a, b: proof_b, c: proof_c };
-        //
-        // let commitment = commitment_client.get_commitment(&employee);
-        // let recipient_hash = poseidon_hash(employee);
-        //
-        // if !verifier.verify_payment_proof(
-        //     &proof,
-        //     &commitment.commitment,
-        //     &nullifier,
-        //     &recipient_hash
-        // ) {
-        //     panic!("Invalid payment proof");
-        // }
+        // Read on-chain commitment and company metadata from payroll_registry.
+        let registry = PayrollRegistryClient::new(&env, &addresses.registry);
+        let on_chain_commitment = registry.get_commitment(&company_id, &employee);
+        let company: CompanyInfo = registry.get_company(&company_id);
 
-        // TODO: Record nullifier to prevent reuse
-        // let commitment_client = SalaryCommitmentClient::new(&env, &addresses.commitment);
-        // commitment_client.record_nullifier(&nullifier);
+        // Ensure only HR admin for this company can trigger payroll.
+        company.admin.require_auth();
 
-        // Execute token transfer
+        // Construct public inputs required by issue #20:
+        // input[0] = on-chain commitment, input[1] = caller-provided amount.
+        let mut public_inputs = soroban_sdk::Vec::new(&env);
+        public_inputs.push_back(on_chain_commitment);
+        public_inputs.push_back(Self::amount_to_public_input(&env, amount));
+
+        // Validate Groth16 proof via proof_verifier contract.
+        let verifier = ProofVerifierClient::new(&env, &addresses.verifier);
+        let proof = Groth16Proof {
+            a: proof_a.clone(),
+            b: proof_b.clone(),
+            c: proof_c.clone(),
+        };
+        if !verifier.verify(&proof, &public_inputs) {
+            panic!("Invalid payment proof");
+        }
+
+        // Execute token transfer from company treasury to employee.
         let token_client = token::Client::new(&env, &addresses.token);
-
-        // Get company treasury from registry
-        // let registry = PayrollRegistryClient::new(&env, &addresses.registry);
-        // let company = registry.get_company(&company_id);
-        // token_client.transfer(&company.treasury, &employee, &amount);
+        token_client.transfer(&company.treasury, &employee, &amount);
 
         // Record payment
         let record = PaymentRecord {
-            company_id: company_id.clone(),
+            company_id,
             employee: employee.clone(),
             proof_hash: nullifier.clone(), // Use nullifier as unique identifier
             timestamp: env.ledger().timestamp(),
@@ -139,7 +155,7 @@ impl PaymentExecutor {
         env.storage().persistent().set(&nullifier_key, &true);
 
         // Update total paid
-        let total_key = DataKey::TotalPaid(company_id.clone());
+        let total_key = DataKey::TotalPaid(company_id);
         let current_total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
         env.storage()
             .persistent()
@@ -149,13 +165,14 @@ impl PaymentExecutor {
         // topics : ("PayrollProcessed", company_id)
         // data   : (employee, amount, period)
         env.events().publish(
-            (Symbol::new(&env, "PayrollProcessed"), company_id),
+            (
+                soroban_sdk::Symbol::new(&env, "PayrollProcessed"),
+                company_id,
+            ),
             (employee, amount, period),
         );
 
-        // For now, use placeholder
-        let _ = (proof_a, proof_b, proof_c, nullifier.clone(), amount);
-        let _ = token_client;
+        let _ = nullifier;
 
         Ok(record)
     }
@@ -164,7 +181,7 @@ impl PaymentExecutor {
     #[allow(clippy::too_many_arguments)]
     pub fn execute_batch_payroll(
         env: Env,
-        company_id: Symbol,
+        company_id: u64,
         employees: soroban_sdk::Vec<Address>,
         amounts: soroban_sdk::Vec<i128>,
         proofs_a: soroban_sdk::Vec<BytesN<64>>,
@@ -189,7 +206,7 @@ impl PaymentExecutor {
         for i in 0..count {
             let record = Self::execute_payment(
                 env.clone(),
-                company_id.clone(),
+                company_id,
                 employees.get(i).unwrap(),
                 amounts.get(i).unwrap(),
                 proofs_a.get(i).unwrap(),
@@ -220,7 +237,7 @@ impl PaymentExecutor {
     }
 
     /// Get total amount paid by company
-    pub fn get_total_paid(env: Env, company_id: Symbol) -> i128 {
+    pub fn get_total_paid(env: Env, company_id: u64) -> i128 {
         let key = DataKey::TotalPaid(company_id);
         env.storage().persistent().get(&key).unwrap_or(0)
     }
@@ -229,15 +246,40 @@ impl PaymentExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::token::{Token, TokenClient};
+    use payroll_registry::PayrollRegistry;
+    use proof_verifier::{ProofVerifier, VerificationKey};
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::Env;
 
     fn setup_addresses(env: &Env) -> ContractAddresses {
+        let registry_id = env.register_contract(None, PayrollRegistry);
+        let verifier_id = env.register_contract(None, ProofVerifier);
+        let token_id = env.register_contract(None, Token);
+
         ContractAddresses {
-            registry: Address::generate(env),
+            registry: registry_id,
             commitment: Address::generate(env),
-            verifier: Address::generate(env),
-            token: Address::generate(env),
+            verifier: verifier_id,
+            token: token_id,
+        }
+    }
+
+    fn mock_vk(env: &Env) -> VerificationKey {
+        VerificationKey {
+            alpha: BytesN::from_array(env, &[0u8; 64]),
+            beta: BytesN::from_array(env, &[0u8; 128]),
+            gamma: BytesN::from_array(env, &[0u8; 128]),
+            delta: BytesN::from_array(env, &[0u8; 128]),
+            ic: soroban_sdk::Vec::from_array(
+                env,
+                [
+                    BytesN::from_array(env, &[0u8; 64]),
+                    BytesN::from_array(env, &[0u8; 64]),
+                    BytesN::from_array(env, &[0u8; 64]),
+                    BytesN::from_array(env, &[0u8; 64]),
+                ],
+            ),
         }
     }
 
@@ -254,6 +296,7 @@ mod tests {
     #[test]
     fn test_is_paid() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, PaymentExecutor);
         let client = PaymentExecutorClient::new(&env, &contract_id);
 
@@ -266,16 +309,76 @@ mod tests {
     }
 
     #[test]
-    fn test_double_spend_proof_reuse_fails() {
+    fn test_execute_payment_transfers_after_verification() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, PaymentExecutor);
         let client = PaymentExecutorClient::new(&env, &contract_id);
 
         let addresses = setup_addresses(&env);
         client.initialize(&addresses);
 
-        let company_id = Symbol::new(&env, "tech_corp");
+        let verifier_client = ProofVerifierClient::new(&env, &addresses.verifier);
+        verifier_client.initialize_verifier(&mock_vk(&env));
+
+        let registry_client = PayrollRegistryClient::new(&env, &addresses.registry);
+        let token_client = TokenClient::new(&env, &addresses.token);
+
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
         let employee = Address::generate(&env);
+        let commitment = BytesN::from_array(&env, &[9u8; 32]);
+
+        let company_id = registry_client.register_company(&admin, &treasury);
+        registry_client.add_employee(&company_id, &employee, &commitment);
+
+        token_client.mint(&treasury, &10_000);
+
+        let valid_proof_a = BytesN::from_array(&env, &[1u8; 64]);
+        let valid_proof_b = BytesN::from_array(&env, &[2u8; 128]);
+        let valid_proof_c = BytesN::from_array(&env, &[3u8; 64]);
+        let valid_nullifier = BytesN::from_array(&env, &[4u8; 32]);
+
+        client.execute_payment(
+            &company_id,
+            &employee,
+            &1000,
+            &valid_proof_a,
+            &valid_proof_b,
+            &valid_proof_c,
+            &valid_nullifier,
+            &1,
+        );
+
+        assert_eq!(token_client.balance(&treasury), 9_000);
+        assert_eq!(token_client.balance(&employee), 1_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Payment already made for this period")]
+    fn test_double_spend_proof_reuse_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, PaymentExecutor);
+        let client = PaymentExecutorClient::new(&env, &contract_id);
+
+        let addresses = setup_addresses(&env);
+        client.initialize(&addresses);
+
+        let verifier_client = ProofVerifierClient::new(&env, &addresses.verifier);
+        verifier_client.initialize_verifier(&mock_vk(&env));
+
+        let registry_client = PayrollRegistryClient::new(&env, &addresses.registry);
+        let token_client = TokenClient::new(&env, &addresses.token);
+
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let employee = Address::generate(&env);
+        let commitment = BytesN::from_array(&env, &[7u8; 32]);
+
+        let company_id = registry_client.register_company(&admin, &treasury);
+        registry_client.add_employee(&company_id, &employee, &commitment);
+        token_client.mint(&treasury, &10_000);
 
         let valid_proof_a = BytesN::from_array(&env, &[1u8; 64]);
         let valid_proof_b = BytesN::from_array(&env, &[2u8; 128]);
@@ -312,13 +415,14 @@ mod tests {
     #[test]
     fn test_batch_array_length_mismatch_fails() {
         let env = Env::default();
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, PaymentExecutor);
         let client = PaymentExecutorClient::new(&env, &contract_id);
 
         let addresses = setup_addresses(&env);
         client.initialize(&addresses);
 
-        let company_id = Symbol::new(&env, "tech_corp");
+        let company_id = 0u64;
 
         let employees =
             soroban_sdk::Vec::from_array(&env, [Address::generate(&env), Address::generate(&env)]);

@@ -1763,8 +1763,10 @@ name = "payment_executor"
 version = "0.1.0"
 dependencies = [
  "payroll_registry",
+ "proof_verifier",
  "soroban-sdk",
  "soroban-token-sdk",
+ "token",
 ]
 
 [[package]]
