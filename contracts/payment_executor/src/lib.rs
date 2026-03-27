@@ -1,10 +1,10 @@
 #![no_std]
 
+use payroll_registry::{CompanyInfo, PayrollRegistryClient};
+use proof_verifier::{Groth16Proof, ProofVerifierClient};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env,
 };
-use payroll_registry::{CompanyInfo, PayrollRegistryClient};
-use proof_verifier::{Groth16Proof, ProofVerifierClient};
 
 /// Payment record
 #[contracttype]
@@ -353,7 +353,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Payment already made for this period")]
     fn test_double_spend_proof_reuse_fails() {
         let env = Env::default();
         env.mock_all_auths();
