@@ -141,10 +141,8 @@ impl Payroll {
             public_inputs.push_back(nullifier.clone());
             public_inputs.push_back(recipient_hash.clone());
 
-            let ok = verifier.verify_payment_proof(&proof, &public_inputs);
             // ── FLOW STEP 2: Groth16 proof verification ───────────────────────
-            let ok =
-                verifier.verify_payment_proof(&proof, &commitment, &nullifier, &recipient_hash);
+            let ok = verifier.verify_payment_proof(&proof, &public_inputs);
             if !ok {
                 panic!("Invalid payment proof for employee {}", i);
             }
