@@ -275,7 +275,6 @@ mod tests {
                     BytesN::from_array(env, &[0u8; 64]),
                     BytesN::from_array(env, &[0u8; 64]),
                     BytesN::from_array(env, &[0u8; 64]),
-                    BytesN::from_array(env, &[0u8; 64]),
                 ],
             ),
         }
