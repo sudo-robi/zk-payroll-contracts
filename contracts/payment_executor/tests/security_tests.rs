@@ -17,7 +17,6 @@ fn mock_vk(env: &Env) -> VerificationKey {
                 BytesN::from_array(env, &[0u8; 64]),
                 BytesN::from_array(env, &[0u8; 64]),
                 BytesN::from_array(env, &[0u8; 64]),
-                BytesN::from_array(env, &[0u8; 64]),
             ],
         ),
     }
